@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-verdix"
+dynamic = ["version"]
+description = "LangChain tool: check an EVM address on Base before sending it funds (safe/caution/danger). Pays per call via x402 in USDC from your agent's wallet, within caps you set."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+keywords = [
+  "langchain",
+  "langgraph",
+  "agents",
+  "tool",
+  "x402",
+  "base",
+  "usdc",
+  "wallet",
+  "address",
+  "risk",
+  "scam",
+  "address-poisoning",
+  "security",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+dependencies = [
+  "langchain-core>=1.0,<2",
+  "x402[evm]>=2.22,<3",
+  "httpx>=0.28.1,<1",
+  "eth-account>=0.13",
+  "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "langchain-tests>=1.0,<2",
+  "langchain>=1.0,<2",
+]
+
+[project.urls]
+Homepage = "https://api.verdixapi.com"
+Repository = "https://github.com/verdixapi/langchain-verdix"
+Issues = "https://github.com/verdixapi/langchain-verdix/issues"
+
+[tool.hatch.version]
+path = "langchain_verdix/_version.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["langchain_verdix", "tests", "examples", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Tests must never reach a network (pytest-socket comes with langchain-tests).
+addopts = "--disable-socket --allow-unix-socket"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
