@@ -22,3 +22,12 @@ TIER_LIST_PRICES_USD: dict[VerdixTier, float] = {
     "standard": 0.10,
     "deep": 0.50,
 }
+
+# The lite tier is sold only at its own URL and never answers "safe", so it
+# stays out of VERDIX_TIERS (and so out of check_address_risk's tier choice,
+# get_pricing and tiers_within_cap); it has its own tool and client methods.
+VerdixLiteTier = Literal["lite"]
+
+LITE_TIER: VerdixLiteTier = "lite"
+
+LITE_LIST_PRICE_USD = 0.01

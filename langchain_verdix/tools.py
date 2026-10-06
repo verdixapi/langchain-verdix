@@ -1,4 +1,4 @@
-"""The `check_address_risk` LangChain tool."""
+"""The `check_address_risk` and `check_address_risk_lite` LangChain tools."""
 
 from __future__ import annotations
 
@@ -9,8 +9,18 @@ from langchain_core.callbacks import AsyncCallbackManagerForToolRun, CallbackMan
 from langchain_core.tools import BaseTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
-from langchain_verdix._constants import TIER_LIST_PRICES_USD, VERDIX_TIERS, VerdixTier
-from langchain_verdix.client import VerdixCheckResult, VerdixClient, tiers_within_cap
+from langchain_verdix._constants import (
+    LITE_LIST_PRICE_USD,
+    TIER_LIST_PRICES_USD,
+    VERDIX_TIERS,
+    VerdixTier,
+)
+from langchain_verdix.client import (
+    VerdixCheckResult,
+    VerdixClient,
+    VerdixLiteCheckResult,
+    tiers_within_cap,
+)
 from langchain_verdix.errors import VerdixError
 
 TIER_GUIDANCE: dict[VerdixTier, str] = {
@@ -223,6 +233,147 @@ class VerdixAddressRiskTool(BaseTool):
         assert self.client is not None
         try:
             result = await self.client.acheck_address(address, self._resolve_tier(tier))
+        except VerdixError as error:
+            raise ToolException(str(error)) from error
+        return self._output(result)
+
+
+LITE_ADVICE: dict[str, str] = {
+    "no_known_risk": (
+        "None of the lists lite checks know this address. This is NOT a safety verdict: lite "
+        'skips some checks (see "not_checked"). Confirm the full address and amount with the '
+        "user, and for a large or irreversible transfer run the full check (check_address_risk, "
+        'quick tier), which can answer "safe".'
+    ),
+    "caution": ADVICE["caution"],
+    "danger": ADVICE["danger"],
+}
+
+LITE_DESCRIPTION = "\n".join(
+    [
+        f"Cheapest screen (${LITE_LIST_PRICE_USD:.2f}) of an EVM address on Base BEFORE sending it",
+        "funds, when the recipient is unknown or new. Checks OFAC sanctions, scam/phishing lists,",
+        "address-poisoning lookalikes, burn addresses, phishing tokens and flagged contract",
+        "deployers; skips address age and the caution-only contract checks. Each call is paid in",
+        "USDC from the agent's wallet, so call it once per destination address.",
+        "",
+        'Verdicts: "no_known_risk", "caution" or "danger". This tool NEVER answers "safe":',
+        '"no_known_risk" only means the address is on none of these lists, not that it is safe.',
+        '"caution" means risk signals or incomplete data: ask the user before sending. "danger"',
+        'means do not send. If you need a "safe" verdict (e.g. before a large transfer), use the',
+        'full check (check_address_risk, quick tier) instead. Follow the "advice" field.',
+    ]
+)
+
+
+class CheckAddressRiskLiteInput(BaseModel):
+    address: str = Field(
+        pattern=r"^0x[0-9a-fA-F]{40}$",
+        description="The full destination address (0x followed by 40 hex characters).",
+    )
+
+
+class VerdixLiteAddressRiskTool(BaseTool):
+    """The cheapest Verdix screen ($0.01) of an EVM address on Base. Never answers `safe`.
+
+    Calls `/risk/address/lite`: sanctions, scam/phishing lists, address
+    poisoning, burn addresses, phishing tokens and flagged deployers. Its clean
+    answer is `no_known_risk`, which is not a safety verdict; use
+    `VerdixAddressRiskTool` (quick tier) when the agent needs `safe`. Paid via
+    x402 in USDC on Base from `account`, under caps the model cannot change.
+
+    Setup:
+        ```bash
+        pip install -U langchain-verdix
+        ```
+
+    Instantiate:
+        ```python
+        from eth_account import Account
+        from langchain_verdix import VerdixLiteAddressRiskTool
+
+        tool = VerdixLiteAddressRiskTool(
+            account=Account.from_key(os.environ["AGENT_PRIVATE_KEY"]),
+            max_price_per_call_usd=0.01,  # never pay more than $0.01 for one check
+            max_total_spend_usd=0.50,  # and at most $0.50 in total
+        )
+        ```
+
+    Invoke:
+        ```python
+        tool.invoke({"address": "0x000000000000000000000000000000000000dEaD"})
+        ```
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    name: str = "check_address_risk_lite"
+    description: str = LITE_DESCRIPTION
+    args_schema: Any = CheckAddressRiskLiteInput
+    response_format: Literal["content", "content_and_artifact"] = "content_and_artifact"
+    handle_tool_error: bool | str | Any = True
+    handle_validation_error: bool | str | Any = True
+
+    account: Any = Field(default=None, exclude=True, repr=False)
+    """The paying wallet, e.g. `Account.from_key(key)`. Not needed if `client` is given."""
+    max_price_per_call_usd: float
+    """Hard cap, in USD, on what one check may cost (lite lists at $0.01)."""
+    max_total_spend_usd: float | None = None
+    """Optional total budget, in USD, for this tool instance."""
+    api_url: str | None = None
+    """Verdix API base URL. Defaults to https://api.verdixapi.com."""
+    client: VerdixClient | None = Field(default=None, exclude=True)
+    """A ready `VerdixClient` (its caps then apply). Pass the same one to
+    `VerdixAddressRiskTool` to share one budget between both tools."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _setup(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        values = dict(values)
+        if "max_price_per_call_usd" not in values:
+            raise VerdixError("max_price_per_call_usd is required")
+        cap = values["max_price_per_call_usd"]
+        if isinstance(cap, (int, float)) and cap < LITE_LIST_PRICE_USD:
+            raise VerdixError(
+                f"max_price_per_call_usd (${cap}) is below the lite tier's price "
+                f"(${LITE_LIST_PRICE_USD:.2f})"
+            )
+        if values.get("client") is None:
+            values["client"] = VerdixClient(
+                account=values.get("account"),
+                max_price_per_call_usd=cap,
+                max_total_spend_usd=values.get("max_total_spend_usd"),
+                api_url=values.get("api_url"),
+            )
+        return values
+
+    @staticmethod
+    def _output(result: VerdixLiteCheckResult) -> tuple[str, dict[str, Any]]:
+        answer = {**result.to_dict(), "advice": LITE_ADVICE[result.verdict]}
+        return json.dumps(answer), answer
+
+    def _run(
+        self,
+        address: str,
+        run_manager: CallbackManagerForToolRun | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        assert self.client is not None
+        try:
+            result = self.client.check_address_lite(address)
+        except VerdixError as error:
+            raise ToolException(str(error)) from error
+        return self._output(result)
+
+    async def _arun(
+        self,
+        address: str,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        assert self.client is not None
+        try:
+            result = await self.client.acheck_address_lite(address)
         except VerdixError as error:
             raise ToolException(str(error)) from error
         return self._output(result)

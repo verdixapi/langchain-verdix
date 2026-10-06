@@ -1,6 +1,6 @@
 # langchain-verdix
 
-A [LangChain](https://python.langchain.com) tool that screens an EVM address on Base **before your agent sends it funds**, and answers `safe`, `caution` or `danger` with reasons.
+A [LangChain](https://python.langchain.com) tool that screens an EVM address on Base **before your agent sends it funds**, and answers `safe`, `caution` or `danger` with reasons. A second, cheaper tool, [`check_address_risk_lite`](#lite-001-never-safe) ($0.01), answers `no_known_risk`, `caution` or `danger` and never `safe`.
 
 It checks OFAC sanctions, scam, phishing and exploit lists, live **address-poisoning lookalikes**, burn addresses, contract and deployer signals, and on-chain behaviour. You don't need an API key or an account. Each check is paid per call via [x402](https://x402.org), in USDC on Base, from your agent's own wallet, under caps you set.
 
@@ -94,6 +94,42 @@ The model picks a tier by what is at stake. It can only pick the tiers that fit 
 
 Each tier has its own URL (`https://api.verdixapi.com/risk/address/{tier}`) with a single price, so the tier the model asks for is exactly the tier that is paid.
 
+## Lite ($0.01, never "safe")
+
+`VerdixLiteAddressRiskTool` is a second, separate tool, `check_address_risk_lite(address)`: the cheapest screen, meant for a quick look before sending USDC to an address you don't know. It calls `/risk/address/lite`, which checks OFAC sanctions, scam and phishing lists, address-poisoning lookalikes, burn addresses, phishing tokens and flagged contract deployers. It skips address age and the caution-only contract checks.
+
+Its verdict is `no_known_risk`, `caution` or `danger`, **never `safe`**. `no_known_risk` only means the address is on none of those lists; it is not a safety verdict. If you need `safe` (say, before a large transfer), use `check_address_risk` with the `quick` tier ($0.02). The tool's description tells the model the same.
+
+```python
+from langchain_verdix import VerdixAddressRiskTool, VerdixClient, VerdixLiteAddressRiskTool
+
+# One client, so both tools draw on one budget.
+verdix = VerdixClient(account=account, max_price_per_call_usd=0.10, max_total_spend_usd=1.00)
+tools = [
+    VerdixLiteAddressRiskTool(max_price_per_call_usd=0.10, client=verdix),
+    VerdixAddressRiskTool(max_price_per_call_usd=0.10, client=verdix),
+]
+```
+
+The model sees:
+
+```jsonc
+{
+  "verdict": "no_known_risk", // "no_known_risk" | "caution" | "danger", never "safe"
+  "limited_checks": true,
+  "checks_performed": ["ofac", "scam_lists", "poisoning_watch", "burn_list", "phishing_token", "deployer_flagged"],
+  "not_checked": ["address_age", "flash_loan_contracts", "unverified_contracts"],
+  "full_check": "Limited checks only: ... use POST /risk/address/quick.",
+  "advice": "None of the lists lite checks know this address. This is NOT a safety verdict: ...",
+  "tier": "lite",
+  "price_usd": 0.01,
+  // plus risk_score, reasons, checked, complete, charged, payment, retry_after_seconds,
+  // address, chain, as_of, as in check_address_risk
+}
+```
+
+`check_address_risk` itself is unchanged: its `tier` choice is still quick, standard and deep, and lite is never one of them. A best-effort lite check that could not finish is listed in `not_checked`; if the API ever answered `safe` on lite, the tool returns an error instead of passing it on.
+
 ## Options
 
 ```python
@@ -128,6 +164,11 @@ pricing = verdix.get_pricing()  # free: reads the unpaid 402 quotes
 result = verdix.check_address("0x...", tier="quick")  # or: await verdix.acheck_address(...)
 if result.verdict != "safe":
     ...  # stop, or ask the user
+
+lite = verdix.check_address_lite("0x...")  # $0.01; or: await verdix.acheck_address_lite(...)
+if lite.verdict != "no_known_risk":  # lite never answers "safe"
+    ...
+lite_price = verdix.get_lite_pricing()  # free; get_pricing() lists quick/standard/deep only
 ```
 
 The errors to expect are `VerdixError`s: a malformed address, a price over your cap, an exhausted budget or an unexpected API answer.

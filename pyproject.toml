@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "langchain-verdix"
 dynamic = ["version"]
-description = "LangChain tool: check an EVM address on Base before sending it funds (safe/caution/danger). Pays per call via x402 in USDC from your agent's wallet, within caps you set."
+description = "LangChain tools: check an EVM address on Base before sending it funds (safe/caution/danger, or a $0.01 lite screen that never says safe). Pays per call via x402 in USDC from your agent's wallet, within caps you set."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

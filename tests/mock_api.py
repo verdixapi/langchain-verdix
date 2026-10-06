@@ -21,7 +21,7 @@ USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 TX_HASH = "0x" + "ab" * 32
 API_URL = "https://api.test"
 
-PRICES = {"quick": 20000, "standard": 100000, "deep": 500000}
+PRICES = {"lite": 10000, "quick": 20000, "standard": 100000, "deep": 500000}
 
 # A throwaway key: signatures are made locally and never reach a network.
 ACCOUNT = Account.create()
@@ -59,6 +59,32 @@ def verdict_body(tier: str, verdict: str = "safe") -> dict[str, Any]:
         "reasons": [] if verdict == "safe" else ["burn_address"],
         "checked": ["ofac", "scam_lists"],
         "as_of": "2026-10-02T00:00:00+00:00",
+    }
+
+
+def lite_body(verdict: str = "no_known_risk") -> dict[str, Any]:
+    """The lite tier's answer shape (`LiteRiskResponse`): never "safe"."""
+    return {
+        "address": ADDRESS,
+        "chain": "base",
+        "tier": "lite",
+        "price_usd": PRICES["lite"] / 1e6,
+        "risk_score": 5 if verdict == "no_known_risk" else 90,
+        "verdict": verdict,
+        "reasons": [] if verdict == "no_known_risk" else ["deployer_flagged"],
+        "checked": ["ofac", "scam_lists", "poisoning_watch", "burn_list"],
+        "as_of": "2026-10-06T00:00:00+00:00",
+        "limited_checks": True,
+        "checks_performed": [
+            "ofac",
+            "scam_lists",
+            "poisoning_watch",
+            "burn_list",
+            "phishing_token",
+            "deployer_flagged",
+        ],
+        "not_checked": ["address_age", "flash_loan_contracts", "unverified_contracts"],
+        "full_check": "Limited checks only: ... use POST /risk/address/quick.",
     }
 
 
@@ -125,6 +151,8 @@ class MockApi:
             return httpx.Response(402, json={}, headers={"payment-required": encode(quote)})
         if self.paid_response:
             return self.paid_response(tier)
+        if tier == "lite":
+            return settled_response(lite_body())
         return settled_response(verdict_body(tier))
 
     def http_client(self) -> httpx.Client:
